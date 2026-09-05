@@ -790,10 +790,26 @@ class UIController {
                             <div style="display: flex; gap: 12px; align-items: center;">
                                 <span class="project-item-tracks">${cp.tracks.length} Tracks</span>
                                 <span class="cloud-badge">Cloud</span>
+                                <button class="project-item-edit" title="プロジェクトを編集">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M12 20h9"></path>
+                                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                    </svg>
+                                </button>
                             </div>
                         `;
                         
-                        el.addEventListener('click', () => this._loadCloudProject(cp));
+                        el.addEventListener('click', (e) => {
+                            if(e.target.closest('.project-item-edit')) return;
+                            this._loadCloudProject(cp);
+                        });
+                        
+                        const editBtn = el.querySelector('.project-item-edit');
+                        editBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            this._openEditor(cp.id, true);
+                        });
+                        
                         dom.projectList.appendChild(el);
                     });
                 }
@@ -1293,6 +1309,10 @@ class UIController {
         dom.progressFill.style.width = '0%';
     }
 
+    _hideLoading() {
+        dom.loadingOverlay.classList.add('hidden');
+    }
+
     _goHome() {
         if (this.engine.isPlaying) {
             this.engine.stop();
@@ -1312,7 +1332,7 @@ class UIController {
     // ----------------------------
     // Editor Management
     // ----------------------------
-    async _openEditor(projectId = null) {
+    async _openEditor(projectId = null, forceCloud = false) {
         const targetId = projectId || this.currentProjectId || (this.currentCloudProject ? this.currentCloudProject.id : null);
         if (!targetId) return;
         
@@ -1321,32 +1341,53 @@ class UIController {
         }
 
         try {
-            let project;
+            let project = null;
             let isCloud = false;
             
-            if (this.currentProjectId === targetId) {
-                // Local project editing
-                project = await this.db.getProject(targetId);
-            } else if (this.currentCloudProject && this.currentCloudProject.id === targetId) {
-                // Cloud project editing (already loaded in memory)
-                project = this.currentCloudProject;
+            // If it's a known cloud project from home screen
+            if (forceCloud) {
+                project = this.cloudProjects.find(p => p.id === targetId);
                 isCloud = true;
             } else {
-                return; // Unsupported flow
+                // Otherwise try local DB first
+                project = await this.db.getProject(targetId);
+                if (!project && this.currentCloudProject && this.currentCloudProject.id === targetId) {
+                    project = this.currentCloudProject;
+                    isCloud = true;
+                } else if (!project) {
+                    // Finally check if it's in cloud projects
+                    project = this.cloudProjects.find(p => p.id === targetId);
+                    if (project) isCloud = true;
+                }
             }
             
-            if (!project) return;
+            if (!project) {
+                console.error("Project not found for editing", targetId);
+                return;
+            }
             
-            // Clone tracks array to avoid mutating until "Done"
             if (isCloud) {
-                // For cloud, use engine tracks because they have the buffer in memory
-                this.editorTracks = project.tracks.map((t, index) => ({
-                    name: t.name,
-                    color: t.color || TRACK_COLORS[index % TRACK_COLORS.length],
-                    buffer: this.engine.tracks[index].buffer.slice(0)
-                }));
+                // Need to download from cloud to edit (original files are needed for saving)
+                this._showLoading();
+                this.editorTracks = [];
+                const total = project.tracks.length;
+                for (let i = 0; i < total; i++) {
+                    const t = project.tracks[i];
+                    dom.loadingText.textContent = `${t.name} をダウンロード中... (${i + 1}/${total})`;
+                    dom.progressFill.style.width = `${((i) / total) * 100}%`;
+                    const audioUrl = this.cloud.getAudioUrl(t.path);
+                    const resp = await fetch(audioUrl);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const arrayBuffer = await resp.arrayBuffer();
+                    this.editorTracks.push({
+                        name: t.name,
+                        color: t.color || TRACK_COLORS[i % TRACK_COLORS.length],
+                        buffer: arrayBuffer
+                    });
+                }
+                this._hideLoading();
             } else {
-                // Local
+                // Local project
                 this.editorTracks = project.tracks.map(t => ({
                     name: t.name,
                     color: t.color,
@@ -1365,6 +1406,8 @@ class UIController {
             dom.editorScreen.classList.remove('hidden');
         } catch(e) {
             console.error("Failed to open editor", e);
+            this._hideLoading();
+            alert("編集画面を開けませんでした。");
         }
     }
 
