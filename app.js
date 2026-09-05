@@ -612,6 +612,7 @@ class UIController {
         this.animationId = null;
         this.isSeeking = false;
         this.currentProjectId = null;
+        this.currentCloudProject = null;
         this.cloudProjects = []; // Cached cloud projects list
         
         // Temporarily holds tracks when editing
@@ -664,9 +665,7 @@ class UIController {
         // App Header
         dom.homeBtn.addEventListener('click', () => this._goHome());
         dom.projectNameInput.addEventListener('change', (e) => {
-            if (this.currentProjectId) {
-                this._updateCurrentProjectName(e.target.value);
-            }
+            this._updateCurrentProject();
         });
         dom.editProjectBtn.addEventListener('click', () => this._openEditor());
 
@@ -722,12 +721,18 @@ class UIController {
         });
 
         // Master fader
+        let masterFaderRaf;
         dom.masterFader.addEventListener('input', (e) => {
             const val = parseInt(e.target.value, 10);
             this.engine.setMasterVolume(val / 100);
-            dom.masterValue.textContent = val;
-            dom.masterFill.style.setProperty('--fill-pct', `${val}%`);
+            if (masterFaderRaf) cancelAnimationFrame(masterFaderRaf);
+            masterFaderRaf = requestAnimationFrame(() => {
+                dom.masterValue.textContent = val;
+                dom.masterFill.style.setProperty('--fill-pct', `${val}%`);
+            });
         });
+        // スマホでのスクロール防止を念押し
+        dom.masterFader.addEventListener('touchmove', (e) => e.stopPropagation(), {passive: true});
         
         dom.masterFader.addEventListener('dblclick', () => {
             dom.masterFader.value = 100;
@@ -1043,9 +1048,19 @@ class UIController {
         dom.app.classList.remove('hidden');
 
         // デモの場合などは currentProjectId がない
-        if (this.currentProjectId) {
-            dom.editProjectBtn.classList.remove('hidden');
-            dom.projectNameInput.removeAttribute('readonly');
+        if (this.currentProjectId || this.currentCloudProject) {
+            if (this.currentProjectId) {
+                dom.editProjectBtn.classList.remove('hidden');
+                dom.projectNameInput.removeAttribute('readonly');
+            } else {
+                dom.editProjectBtn.classList.add('hidden');
+                dom.projectNameInput.value = this.currentCloudProject.name;
+                if (this.cloud.isUploadConfigured()) {
+                    dom.projectNameInput.removeAttribute('readonly');
+                } else {
+                    dom.projectNameInput.setAttribute('readonly', 'true');
+                }
+            }
             // クラウドアップロードボタンの表示（管理者のみ）
             if (dom.cloudUploadBtn && this.cloud.isUploadConfigured()) {
                 dom.cloudUploadBtn.classList.remove('hidden');
@@ -1058,6 +1073,38 @@ class UIController {
         }
 
         this._updatePlayButton(false);
+    }
+
+    async _updateCurrentProject() {
+        if (this.currentProjectId) {
+            try {
+                const project = await this.db.getProject(this.currentProjectId);
+                if (project) {
+                    project.tracks.forEach((t, i) => {
+                        if (this.engine.tracks[i]) t.name = this.engine.tracks[i].name;
+                    });
+                    project.name = dom.projectNameInput.value;
+                    await this.db.saveProject(project);
+                }
+            } catch (e) {
+                console.error("Failed to update local project", e);
+            }
+        } else if (this.currentCloudProject && this.cloud.isUploadConfigured()) {
+            try {
+                const existingProjects = await this.cloud.getProjectsJson();
+                const target = existingProjects.find(p => p.id === this.currentCloudProject.id);
+                if (target) {
+                    target.tracks.forEach((t, i) => {
+                        if (this.engine.tracks[i]) t.name = this.engine.tracks[i].name;
+                    });
+                    target.name = dom.projectNameInput.value;
+                    await this.cloud.uploadProjectsJson(existingProjects);
+                    this.cloudProjects = existingProjects;
+                }
+            } catch (e) {
+                console.error("Failed to update cloud project", e);
+            }
+        }
     }
 
     _createChannelStrip(track, index) {
@@ -1119,12 +1166,18 @@ class UIController {
         const faderFill = channel.querySelector('.fader-fill');
         const valDisplay = channel.querySelector('.channel-value');
         
+        let faderRaf;
         fader.addEventListener('input', (e) => {
             const val = parseInt(e.target.value, 10);
             this.engine.setTrackVolume(index, val / 100);
-            valDisplay.textContent = val;
-            faderFill.style.setProperty('--fill-pct', `${val}%`);
+            if (faderRaf) cancelAnimationFrame(faderRaf);
+            faderRaf = requestAnimationFrame(() => {
+                valDisplay.textContent = val;
+                faderFill.style.setProperty('--fill-pct', `${val}%`);
+            });
         });
+        // スマホでのスクロール防止念押し
+        fader.addEventListener('touchmove', (e) => e.stopPropagation(), {passive: true});
 
         fader.addEventListener('dblclick', () => {
             fader.value = 80;
@@ -1483,6 +1536,7 @@ class UIController {
             this.engine.destroy();
             this.engine.init();
             this.currentProjectId = null;
+            this.currentCloudProject = cloudProject;
             
             dom.projectNameInput.value = cloudProject.name;
             

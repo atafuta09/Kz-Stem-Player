@@ -888,6 +888,7 @@ body {
     padding: 0;
     cursor: pointer;
     z-index: 3;
+    touch-action: none; /* スマホ操作時のスクロール防止 */
 }
 
 .fader:focus {
