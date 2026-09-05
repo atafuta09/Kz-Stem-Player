@@ -220,7 +220,10 @@ class CloudManager {
 
         const endpoint = this.config.endpoint.replace(/\/$/, '');
         const bucket = this.config.bucketName;
-        const url = `${endpoint}/${bucket}/${key}`;
+        
+        // URI-encode each segment of the key (supports Japanese / special characters)
+        const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+        const url = `${endpoint}/${bucket}/${encodedKey}`;
 
         const now = new Date();
         const dateStamp = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
@@ -236,7 +239,7 @@ class CloudManager {
 
         // Create canonical request
         const payloadHash = await this._sha256Hex(body);
-        const canonicalUri = `/${bucket}/${key}`;
+        const canonicalUri = `/${bucket}/${encodedKey}`;
         const canonicalQueryString = '';
         const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${dateStamp}\n`;
         const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
@@ -253,11 +256,11 @@ class CloudManager {
 
         const authorization = `AWS4-HMAC-SHA256 Credential=${this.config.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
+        // Do NOT pass 'Host' header in fetch - browsers forbid setting Host header and will reject/ignore it
         const resp = await fetch(url, {
             method: 'PUT',
             headers: {
                 'Content-Type': contentType,
-                'Host': host,
                 'x-amz-content-sha256': payloadHash,
                 'x-amz-date': dateStamp,
                 'Authorization': authorization,
@@ -267,7 +270,7 @@ class CloudManager {
 
         if (!resp.ok) {
             const text = await resp.text();
-            throw new Error(`Upload failed: ${resp.status} ${text}`);
+            throw new Error(`Upload failed: HTTP ${resp.status} ${text}`);
         }
         return true;
     }
@@ -1572,7 +1575,13 @@ class UIController {
             
         } catch (e) {
             console.error('Cloud upload failed:', e);
-            alert(`アップロードに失敗しました: ${e.message}`);
+            let detail = e.message || '不明なエラー';
+            if (e.name === 'TypeError' || detail.toLowerCase().includes('fetch')) {
+                detail = '通信またはCORSエラーです。\nCloudflare R2バケットの「CORSポリシー」が設定されているか確認してください。';
+            } else if (detail.includes('403')) {
+                detail = 'アクセスが拒否されました (403 Forbidden)。\nアクセスキー/シークレットキーの権限（Object Read & Write）やバケット名をご確認ください。';
+            }
+            alert(`アップロードに失敗しました:\n${detail}`);
             dom.loadingOverlay.classList.add('hidden');
             dom.app.classList.remove('hidden');
         }
