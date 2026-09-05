@@ -163,16 +163,23 @@ class DBManager {
 // ==============================
 // Cloud Manager (Cloudflare R2)
 // ==============================
+const DEFAULT_PUBLIC_URL = 'https://pub-3f206d56c34049e6802f7bce89d76a54.r2.dev'; // 💡 ここに公開URL（例: https://pub-xxx.r2.dev）を設定すると全端末で設定不要になります
+
 class CloudManager {
     constructor() {
         this.config = this._loadConfig();
     }
 
     _loadConfig() {
-        let config = { endpoint: '', accessKeyId: '', secretAccessKey: '', publicUrl: '', bucketName: '' };
+        let config = { endpoint: '', accessKeyId: '', secretAccessKey: '', publicUrl: DEFAULT_PUBLIC_URL, bucketName: '' };
         try {
             const saved = localStorage.getItem('kz_cloud_config');
-            if (saved) config = { ...config, ...JSON.parse(saved) };
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                config = { ...config, ...parsed };
+                // 💡 ローカル設定よりハードコードのデフォルトURLを優先したい場合は以下を有効化
+                if (DEFAULT_PUBLIC_URL) config.publicUrl = DEFAULT_PUBLIC_URL;
+            }
         } catch (e) {}
 
         // Check URL query parameters (e.g. ?r2=https://pub-xxx.r2.dev)
