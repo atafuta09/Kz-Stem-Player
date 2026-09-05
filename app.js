@@ -719,7 +719,7 @@ class UIController {
         // スマホでのスクロール防止を念押し
         dom.masterFader.addEventListener('touchmove', (e) => e.stopPropagation(), {passive: true});
         
-        dom.masterFader.addEventListener('dblclick', () => {
+        this._addDoubleTapListener(dom.masterFader, () => {
             dom.masterFader.value = 100;
             this.engine.setMasterVolume(1.0);
             dom.masterValue.textContent = 100;
@@ -1168,7 +1168,7 @@ class UIController {
         // スマホでのスクロール防止念押し
         fader.addEventListener('touchmove', (e) => e.stopPropagation(), {passive: true});
 
-        fader.addEventListener('dblclick', () => {
+        this._addDoubleTapListener(fader, () => {
             fader.value = 80;
             this.engine.setTrackVolume(index, 0.8);
             valDisplay.textContent = 80;
@@ -1313,7 +1313,7 @@ class UIController {
     // Editor Management
     // ----------------------------
     async _openEditor(projectId = null) {
-        const targetId = projectId || this.currentProjectId;
+        const targetId = projectId || this.currentProjectId || (this.currentCloudProject ? this.currentCloudProject.id : null);
         if (!targetId) return;
         
         if (this.engine.isPlaying) {
@@ -1321,18 +1321,41 @@ class UIController {
         }
 
         try {
-            const project = await this.db.getProject(targetId);
+            let project;
+            let isCloud = false;
+            
+            if (this.currentProjectId === targetId) {
+                // Local project editing
+                project = await this.db.getProject(targetId);
+            } else if (this.currentCloudProject && this.currentCloudProject.id === targetId) {
+                // Cloud project editing (already loaded in memory)
+                project = this.currentCloudProject;
+                isCloud = true;
+            } else {
+                return; // Unsupported flow
+            }
+            
             if (!project) return;
             
             // Clone tracks array to avoid mutating until "Done"
-            this.editorTracks = project.tracks.map(t => ({
-                name: t.name,
-                color: t.color,
-                buffer: t.buffer.slice(0) // Copy array buffer
-            }));
+            if (isCloud) {
+                // For cloud, use engine tracks because they have the buffer in memory
+                this.editorTracks = project.tracks.map((t, index) => ({
+                    name: t.name,
+                    color: t.color || TRACK_COLORS[index % TRACK_COLORS.length],
+                    buffer: this.engine.tracks[index].buffer.slice(0)
+                }));
+            } else {
+                // Local
+                this.editorTracks = project.tracks.map(t => ({
+                    name: t.name,
+                    color: t.color,
+                    buffer: t.buffer.slice(0)
+                }));
+            }
             
-            // 編集中のプロジェクトIDを一時保存
             this.editingProjectId = targetId;
+            this.isEditingCloud = isCloud;
             
             dom.editorProjectNameInput.value = project.name;
             this._renderEditorTracks();
@@ -1431,23 +1454,69 @@ class UIController {
             dom.editorScreen.classList.add('hidden');
             this._showLoading();
             
-            const project = await this.db.getProject(this.editingProjectId);
-            project.name = newProjectName;
-            project.tracks = this.editorTracks;
-            await this.db.saveProject(project);
-            
-            this.editorTracks = [];
-            
-            if (this.currentProjectId === this.editingProjectId) {
-                // 現在再生中のものを編集した場合は再ロード
+            if (this.isEditingCloud) {
+                // クラウドプロジェクトの保存処理
+                const cloudId = this.editingProjectId;
+                const tracksMeta = [];
+                const total = this.editorTracks.length;
+                
+                for (let i = 0; i < total; i++) {
+                    const t = this.editorTracks[i];
+                    const ext = 'aac'; // simplified extension
+                    const key = `${cloudId}/${t.name}.${ext}`;
+                    
+                    dom.loadingText.textContent = `${t.name} をアップロード中... (${i + 1}/${total})`;
+                    dom.progressFill.style.width = `${((i + 0.5) / total) * 100}%`;
+                    
+                    const body = new Uint8Array(t.buffer);
+                    await this.cloud.uploadFile(key, body, 'audio/aac');
+                    
+                    tracksMeta.push({
+                        name: t.name,
+                        color: t.color,
+                        path: key,
+                    });
+                    
+                    dom.progressFill.style.width = `${((i + 1) / total) * 100}%`;
+                }
+                
+                dom.loadingText.textContent = 'プロジェクト情報を更新中...';
+                const existingProjects = await this.cloud.getProjectsJson();
+                const targetIndex = existingProjects.findIndex(p => p.id === cloudId);
+                
+                if (targetIndex >= 0) {
+                    existingProjects[targetIndex].name = newProjectName;
+                    existingProjects[targetIndex].tracks = tracksMeta;
+                    existingProjects[targetIndex].date = Date.now();
+                }
+                
+                await this.cloud.uploadProjectsJson(existingProjects);
+                this.cloudProjects = existingProjects;
+                
+                this.editorTracks = [];
                 this.editingProjectId = null;
-                await this._loadProjectFromDB(this.currentProjectId);
+                this.isEditingCloud = false;
+                
+                await this._loadCloudProject(cloudId);
+                
             } else {
-                // ホーム画面から別のものを編集した場合はホームへ戻る
-                this.editingProjectId = null;
-                this._renderProjectsList();
-                this._hideLoading();
-                this._goHome();
+                // ローカルプロジェクトの保存処理
+                const project = await this.db.getProject(this.editingProjectId);
+                project.name = newProjectName;
+                project.tracks = this.editorTracks;
+                await this.db.saveProject(project);
+                
+                this.editorTracks = [];
+                
+                if (this.currentProjectId === this.editingProjectId) {
+                    this.editingProjectId = null;
+                    await this._loadProjectFromDB(this.currentProjectId);
+                } else {
+                    this.editingProjectId = null;
+                    this._renderProjectsList();
+                    this._hideLoading();
+                    this._goHome();
+                }
             }
         } catch (e) {
             console.error("Failed to save changes", e);
@@ -1459,24 +1528,44 @@ class UIController {
     async _deleteProjectFromEditor() {
         if (!this.editingProjectId) return;
         
-        if (confirm('このプロジェクトを完全に削除してもよろしいですか？')) {
+        if (confirm('このプロジェクトを完全に削除してもよろしいですか？\n※クラウドの場合、一覧から削除されます。')) {
             try {
                 dom.editorScreen.classList.add('hidden');
                 this._showLoading();
                 
-                await this.db.deleteProject(this.editingProjectId);
-                
-                if (this.currentProjectId === this.editingProjectId) {
-                    this.currentProjectId = null;
+                if (this.isEditingCloud) {
+                    // クラウドプロジェクトの論理削除
+                    const existingProjects = await this.cloud.getProjectsJson();
+                    const filtered = existingProjects.filter(p => p.id !== this.editingProjectId);
+                    await this.cloud.uploadProjectsJson(filtered);
+                    
+                    this.cloudProjects = filtered;
+                    this.currentCloudProject = null;
                     this.engine.destroy();
+                    
+                    this.editorTracks = [];
+                    this.editingProjectId = null;
+                    this.isEditingCloud = false;
+                    
+                    this._renderProjectsList();
+                    this._hideLoading();
+                    this._goHome();
+                } else {
+                    // ローカルプロジェクトの削除
+                    await this.db.deleteProject(this.editingProjectId);
+                    
+                    if (this.currentProjectId === this.editingProjectId) {
+                        this.currentProjectId = null;
+                        this.engine.destroy();
+                    }
+                    
+                    this.editorTracks = [];
+                    this.editingProjectId = null;
+                    
+                    this._renderProjectsList();
+                    this._hideLoading();
+                    this._goHome();
                 }
-                
-                this.editorTracks = [];
-                this.editingProjectId = null;
-                
-                this._renderProjectsList();
-                this._hideLoading();
-                this._goHome();
                 
             } catch (e) {
                 console.error("Failed to delete project", e);
@@ -1556,9 +1645,8 @@ class UIController {
             
             if (this.engine.tracks.length > 0) {
                 this._initMixer();
-                // クラウドプロジェクトの場合は編集ボタンを非表示
-                dom.editProjectBtn.classList.add('hidden');
-                dom.projectNameInput.setAttribute('readonly', 'true');
+                dom.editProjectBtn.classList.remove('hidden');
+                dom.projectNameInput.removeAttribute('readonly');
                 // クラウドアップロードボタンも非表示
                 if (dom.cloudUploadBtn) dom.cloudUploadBtn.classList.add('hidden');
             } else {
@@ -1674,6 +1762,23 @@ class UIController {
 
     _delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    _addDoubleTapListener(el, callback) {
+        let lastTap = 0;
+        el.addEventListener('touchstart', (e) => {
+            const currentTime = new Date().getTime();
+            const tapLength = currentTime - lastTap;
+            if (tapLength < 300 && tapLength > 0) {
+                e.preventDefault();
+                callback(e);
+            }
+            lastTap = currentTime;
+        }, { passive: false });
+        
+        el.addEventListener('dblclick', (e) => {
+            callback(e);
+        });
     }
 }
 

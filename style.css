@@ -1339,4 +1339,8 @@ body {
     .channel-master {
         margin-bottom: 60px;
     }
+
+    #edit-project-btn {
+        display: none !important;
+    }
 }
