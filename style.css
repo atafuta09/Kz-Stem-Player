@@ -1319,7 +1319,7 @@ body {
     .fader::-webkit-slider-thumb {
         width: 16px;
         height: 32px;
-        margin-top: -12px; /* Center thumb vertically over the 8px track */
+        margin-top: 0; /* Center thumb vertically */
     }
     .fader::-moz-range-track {
         height: 100%;
@@ -1333,5 +1333,10 @@ body {
         width: 24px;
         font-size: 0.65rem;
         text-align: right;
+    }
+
+    /* Add space below master fader */
+    .channel-master {
+        margin-bottom: 60px;
     }
 }

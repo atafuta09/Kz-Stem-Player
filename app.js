@@ -234,7 +234,7 @@ class CloudManager {
     }
 
     // --- S3-compatible Upload (AWS Sig V4) ---
-    async uploadFile(key, body, contentType = 'application/octet-stream') {
+    async uploadFile(key, body, contentType = 'application/octet-stream', noCache = false) {
         if (!this.isUploadConfigured()) throw new Error('Upload not configured');
 
         const endpoint = this.config.endpoint.replace(/\/$/, '');
@@ -260,8 +260,13 @@ class CloudManager {
         const payloadHash = await this._sha256Hex(body);
         const canonicalUri = `/${bucket}/${encodedKey}`;
         const canonicalQueryString = '';
-        const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${dateStamp}\n`;
-        const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
+        let canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${dateStamp}\n`;
+        let signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
+        
+        if (noCache) {
+            canonicalHeaders = `cache-control:no-cache, no-store, must-revalidate\n` + canonicalHeaders;
+            signedHeaders = 'cache-control;' + signedHeaders;
+        }
 
         const canonicalRequest = `PUT\n${canonicalUri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
 
@@ -275,15 +280,20 @@ class CloudManager {
 
         const authorization = `AWS4-HMAC-SHA256 Credential=${this.config.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
+        const fetchHeaders = {
+            'Content-Type': contentType,
+            'x-amz-content-sha256': payloadHash,
+            'x-amz-date': dateStamp,
+            'Authorization': authorization,
+        };
+        if (noCache) {
+            fetchHeaders['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+        }
+
         // Do NOT pass 'Host' header in fetch - browsers forbid setting Host header and will reject/ignore it
         const resp = await fetch(url, {
             method: 'PUT',
-            headers: {
-                'Content-Type': contentType,
-                'x-amz-content-sha256': payloadHash,
-                'x-amz-date': dateStamp,
-                'Authorization': authorization,
-            },
+            headers: fetchHeaders,
             body: body,
         });
 
@@ -297,7 +307,7 @@ class CloudManager {
     async uploadProjectsJson(projectsArray) {
         const json = JSON.stringify(projectsArray, null, 2);
         const body = new TextEncoder().encode(json);
-        return this.uploadFile('projects.json', body, 'application/json');
+        return this.uploadFile('projects.json', body, 'application/json', true);
     }
 
     // --- AWS Sig V4 Helpers ---
@@ -452,77 +462,38 @@ class AudioEngine {
         const startTime = this.audioContext.currentTime;
 
         this.tracks.forEach(track => {
-            if (!window.SoundTouch) {
-                // Fallback if SoundTouch is not loaded
-                const source = this.audioContext.createBufferSource();
-                source.buffer = track.buffer;
-                source.connect(track.gainNode);
+            const source = this.audioContext.createBufferSource();
+            source.buffer = track.buffer;
+            source.connect(track.gainNode);
 
-                const offset = Math.min(this.pauseOffset, track.buffer.duration);
-                const remaining = track.buffer.duration - offset;
+            const offset = Math.min(this.pauseOffset, track.buffer.duration);
+            const remaining = track.buffer.duration - offset;
 
-                if (remaining > 0) {
-                    source.playbackRate.value = this.playbackRate;
-                    source.start(startTime, offset);
-                }
-                track.sourceNode = source;
-            } else {
-                // SoundTouchJS implementation (Preserves Pitch)
-                const offset = Math.min(this.pauseOffset, track.buffer.duration);
-                const offsetSamples = Math.floor(offset * this.audioContext.sampleRate);
-                
-                const stSource = new window.SoundTouch.WebAudioBufferSource(track.buffer);
-                stSource.position = offsetSamples;
-                
-                const st = new window.SoundTouch.SoundTouch();
-                st.tempo = this.playbackRate;
-                
-                const filter = new window.SoundTouch.SimpleFilter(stSource, st);
-                const node = window.SoundTouch.getWebAudioNode(this.audioContext, filter);
-                
-                node.connect(track.gainNode);
-                track.sourceNode = node;
-                track.st = st; // Store SoundTouch instance to update tempo dynamically
+            if (remaining > 0) {
+                source.start(startTime, offset);
             }
+            track.sourceNode = source;
         });
 
         this.startContextTime = startTime;
         this.isPlaying = true;
     }
 
-    setPlaybackRate(rate) {
-        if (this.isPlaying) {
-            // Calculate elapsed time before changing rate
-            const elapsed = (this.audioContext.currentTime - this.startContextTime) * this.playbackRate;
-            this.pauseOffset += elapsed;
-            this.startContextTime = this.audioContext.currentTime;
-
-            // Update tempo dynamically if using SoundTouch
-            this.tracks.forEach(track => {
-                if (track.st) {
-                    track.st.tempo = rate;
-                } else if (track.sourceNode && track.sourceNode.playbackRate) {
-                    track.sourceNode.playbackRate.value = rate;
-                }
-            });
-        }
-        this.playbackRate = rate;
-    }
-
     stop() {
         if (!this.isPlaying) return;
 
-        this.pauseOffset += (this.audioContext.currentTime - this.startContextTime) * this.playbackRate;
+        this.pauseOffset += this.audioContext.currentTime - this.startContextTime;
+        if (this.pauseOffset > this.duration) {
+            this.pauseOffset = this.duration;
+        }
 
         this.tracks.forEach(track => {
             if (track.sourceNode) {
                 if (track.sourceNode.stop) {
-                    // For native AudioBufferSourceNode
                     try { track.sourceNode.stop(); } catch (e) {}
                 }
                 track.sourceNode.disconnect();
                 track.sourceNode = null;
-                track.st = null;
             }
         });
 
@@ -683,9 +654,15 @@ class UIController {
 
         // App Header
         dom.homeBtn.addEventListener('click', () => this._goHome());
-        dom.projectNameInput.addEventListener('change', (e) => {
-            this._updateCurrentProject();
+        
+        let projectNameDebounce;
+        dom.projectNameInput.addEventListener('input', (e) => {
+            clearTimeout(projectNameDebounce);
+            projectNameDebounce = setTimeout(() => {
+                this._updateCurrentProject();
+            }, 500);
         });
+        
         dom.editProjectBtn.addEventListener('click', () => this._openEditor());
 
         // Editor Screen
@@ -727,17 +704,6 @@ class UIController {
             if (this.isSeeking) this._moveSeek(e.touches[0]);
         });
         document.addEventListener('touchend', () => this._endSeek());
-
-        // Tempo buttons
-        const tempoBtns = document.querySelectorAll('.tempo-btn');
-        tempoBtns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                tempoBtns.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                const rate = parseFloat(btn.dataset.tempo);
-                this.engine.setPlaybackRate(rate);
-            });
-        });
 
         // Master fader
         let masterFaderRaf;
@@ -1161,9 +1127,13 @@ class UIController {
         
         // Track Name Edit
         const nameInput = channel.querySelector('.channel-name');
-        nameInput.addEventListener('change', (e) => {
+        let nameDebounce;
+        nameInput.addEventListener('input', (e) => {
             this.engine.setTrackName(index, e.target.value);
-            this._updateCurrentProject();
+            clearTimeout(nameDebounce);
+            nameDebounce = setTimeout(() => {
+                this._updateCurrentProject();
+            }, 500);
         });
 
         // Solo button
