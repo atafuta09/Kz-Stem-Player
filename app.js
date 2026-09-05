@@ -169,11 +169,23 @@ class CloudManager {
     }
 
     _loadConfig() {
+        let config = { endpoint: '', accessKeyId: '', secretAccessKey: '', publicUrl: '', bucketName: '' };
         try {
             const saved = localStorage.getItem('kz_cloud_config');
-            if (saved) return JSON.parse(saved);
+            if (saved) config = { ...config, ...JSON.parse(saved) };
         } catch (e) {}
-        return { endpoint: '', accessKeyId: '', secretAccessKey: '', publicUrl: '', bucketName: '' };
+
+        // Check URL query parameters (e.g. ?r2=https://pub-xxx.r2.dev)
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const r2Param = params.get('r2');
+            if (r2Param) {
+                config.publicUrl = decodeURIComponent(r2Param);
+                this.saveConfig(config);
+            }
+        } catch (e) {}
+
+        return config;
     }
 
     saveConfig(config) {
@@ -186,7 +198,7 @@ class CloudManager {
     }
 
     isConfigured() {
-        return !!(this.config.publicUrl && this.config.bucketName);
+        return !!(this.config.publicUrl);
     }
 
     isUploadConfigured() {
