@@ -741,7 +741,14 @@ class UIController {
 
         // Cloud Settings
         if (dom.cloudSettingsBtn) {
-            dom.cloudSettingsBtn.addEventListener('click', () => this._openCloudSettings());
+            dom.cloudSettingsBtn.addEventListener('click', () => {
+                const pass = prompt('クラウド設定のパスワードを入力してください');
+                if (pass === '0214') {
+                    this._openCloudSettings();
+                } else if (pass !== null) {
+                    alert('パスワードが間違っています。');
+                }
+            });
         }
         if (dom.cloudSettingsSaveBtn) {
             dom.cloudSettingsSaveBtn.addEventListener('click', () => this._saveCloudSettings());
