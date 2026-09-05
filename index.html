@@ -40,7 +40,7 @@
                         <circle cx="18" cy="16" r="3"/>
                     </svg>
                 </div>
-                <h1 class="drop-title">Kz Stem Player <span style="font-size: 0.875rem; color: var(--text-muted); margin-left: 8px; font-weight: 400;">Ver1.05</span></h1>
+                <h1 class="drop-title">Kz Stem Player <span style="font-size: 0.875rem; color: var(--text-muted); margin-left: 8px; font-weight: 400;">Ver1.06</span></h1>
                 <p class="drop-description">ステムファイルをドラッグ&ドロップしてください</p>
                 <div class="drop-divider">
                     <span>または</span>
@@ -63,6 +63,13 @@
                     </button>
                 </div>
                 <p class="drop-hint">対応形式: WAV, MP3, FLAC, OGG, AAC</p>
+                <button class="btn btn-ghost cloud-settings-home-btn" id="cloud-settings-btn" title="クラウド設定">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    クラウド設定
+                </button>
             </div>
 
             <!-- Saved Projects -->
@@ -91,7 +98,7 @@
                     <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
                     <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
                 </svg>
-                <span>Kz Stem Player <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 8px; font-weight: 400;">Ver1.05</span></span>
+                <span>Kz Stem Player <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 8px; font-weight: 400;">Ver1.06</span></span>
             </div>
             <div class="app-project-name">
                 <input type="text" id="project-name-input" value="Untitled Project" aria-label="プロジェクト名">
@@ -110,6 +117,15 @@
                         <polyline points="9 22 9 12 15 12 15 22"></polyline>
                     </svg>
                     ホーム
+                </button>
+                <button class="btn btn-accent hidden" id="cloud-upload-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="16 16 12 12 8 16"></polyline>
+                        <line x1="12" y1="12" x2="12" y2="21"></line>
+                        <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+                        <polyline points="16 16 12 12 8 16"></polyline>
+                    </svg>
+                    クラウドに公開
                 </button>
             </div>
         </header>
@@ -231,6 +247,56 @@
                 </div>
             </div>
             <button class="btn btn-ghost" id="editor-cancel-btn" style="align-self: center;">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- ==============================
+         Cloud Settings Screen
+         ============================== -->
+    <div id="cloud-settings-screen" class="overlay hidden">
+        <div class="home-container" style="max-width: 600px;">
+            <div class="project-section" style="display: block;">
+                <div class="project-section-header">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                    </svg>
+                    <h2>クラウド設定 (Cloudflare R2)</h2>
+                </div>
+                
+                <div class="cloud-settings-form">
+                    <div class="cloud-field">
+                        <label for="cloud-public-url-input">公開URL (R2.dev URL)</label>
+                        <input type="text" id="cloud-public-url-input" class="cloud-input" placeholder="https://pub-xxxxxxxx.r2.dev">
+                        <span class="cloud-field-hint">閲覧に必要（全端末で曲を表示するために使用されます）</span>
+                    </div>
+                    <div class="cloud-field">
+                        <label for="cloud-bucket-input">バケット名</label>
+                        <input type="text" id="cloud-bucket-input" class="cloud-input" placeholder="kz-stem-player-storage">
+                    </div>
+                    
+                    <div class="cloud-divider">
+                        <span>管理者用（アップロード）</span>
+                    </div>
+                    
+                    <div class="cloud-field">
+                        <label for="cloud-endpoint-input">S3 エンドポイント</label>
+                        <input type="text" id="cloud-endpoint-input" class="cloud-input" placeholder="https://xxxxxxxxxx.r2.cloudflarestorage.com">
+                    </div>
+                    <div class="cloud-field">
+                        <label for="cloud-access-key-input">アクセスキー ID</label>
+                        <input type="text" id="cloud-access-key-input" class="cloud-input" placeholder="Access Key ID">
+                    </div>
+                    <div class="cloud-field">
+                        <label for="cloud-secret-key-input">シークレットアクセスキー</label>
+                        <input type="password" id="cloud-secret-key-input" class="cloud-input" placeholder="Secret Access Key">
+                    </div>
+                    
+                    <div class="cloud-actions">
+                        <button class="btn btn-primary" id="cloud-settings-save-btn">保存</button>
+                        <button class="btn btn-ghost" id="cloud-settings-cancel-btn">キャンセル</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

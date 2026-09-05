@@ -58,6 +58,18 @@ const dom = {
     editorDropContent:document.getElementById('editor-drop-content'),
     editorDoneBtn:    document.getElementById('editor-done-btn'),
     editorCancelBtn:  document.getElementById('editor-cancel-btn'),
+    
+    // Cloud UI
+    cloudSettingsBtn:      document.getElementById('cloud-settings-btn'),
+    cloudSettingsScreen:   document.getElementById('cloud-settings-screen'),
+    cloudEndpointInput:    document.getElementById('cloud-endpoint-input'),
+    cloudBucketInput:      document.getElementById('cloud-bucket-input'),
+    cloudAccessKeyInput:   document.getElementById('cloud-access-key-input'),
+    cloudSecretKeyInput:   document.getElementById('cloud-secret-key-input'),
+    cloudPublicUrlInput:   document.getElementById('cloud-public-url-input'),
+    cloudSettingsSaveBtn:  document.getElementById('cloud-settings-save-btn'),
+    cloudSettingsCancelBtn:document.getElementById('cloud-settings-cancel-btn'),
+    cloudUploadBtn:        document.getElementById('cloud-upload-btn'),
 };
 
 // ==============================
@@ -145,6 +157,159 @@ class DBManager {
             request.onsuccess = () => resolve();
             request.onerror = (e) => reject(e.target.error);
         });
+    }
+}
+
+// ==============================
+// Cloud Manager (Cloudflare R2)
+// ==============================
+class CloudManager {
+    constructor() {
+        this.config = this._loadConfig();
+    }
+
+    _loadConfig() {
+        try {
+            const saved = localStorage.getItem('kz_cloud_config');
+            if (saved) return JSON.parse(saved);
+        } catch (e) {}
+        return { endpoint: '', accessKeyId: '', secretAccessKey: '', publicUrl: '', bucketName: '' };
+    }
+
+    saveConfig(config) {
+        this.config = { ...config };
+        localStorage.setItem('kz_cloud_config', JSON.stringify(this.config));
+    }
+
+    getConfig() {
+        return { ...this.config };
+    }
+
+    isConfigured() {
+        return !!(this.config.publicUrl && this.config.bucketName);
+    }
+
+    isUploadConfigured() {
+        return !!(this.config.endpoint && this.config.accessKeyId && this.config.secretAccessKey && this.config.bucketName);
+    }
+
+    // --- Public URL Read ---
+    async getProjectsJson() {
+        if (!this.config.publicUrl) return [];
+        try {
+            const url = `${this.config.publicUrl.replace(/\/$/, '')}/projects.json?t=${Date.now()}`;
+            const resp = await fetch(url);
+            if (!resp.ok) {
+                if (resp.status === 404) return [];
+                throw new Error(`HTTP ${resp.status}`);
+            }
+            return await resp.json();
+        } catch (e) {
+            console.warn('Cloud projects.json not found or error:', e);
+            return [];
+        }
+    }
+
+    getAudioUrl(path) {
+        return `${this.config.publicUrl.replace(/\/$/, '')}/${path}`;
+    }
+
+    // --- S3-compatible Upload (AWS Sig V4) ---
+    async uploadFile(key, body, contentType = 'application/octet-stream') {
+        if (!this.isUploadConfigured()) throw new Error('Upload not configured');
+
+        const endpoint = this.config.endpoint.replace(/\/$/, '');
+        const bucket = this.config.bucketName;
+        const url = `${endpoint}/${bucket}/${key}`;
+
+        const now = new Date();
+        const dateStamp = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+        const shortDate = dateStamp.substring(0, 8);
+
+        // Parse endpoint to get host
+        const urlObj = new URL(endpoint);
+        const host = `${urlObj.host}`;
+
+        const region = 'auto';
+        const service = 's3';
+        const scope = `${shortDate}/${region}/${service}/aws4_request`;
+
+        // Create canonical request
+        const payloadHash = await this._sha256Hex(body);
+        const canonicalUri = `/${bucket}/${key}`;
+        const canonicalQueryString = '';
+        const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${dateStamp}\n`;
+        const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
+
+        const canonicalRequest = `PUT\n${canonicalUri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+
+        // Create string to sign
+        const canonicalRequestHash = await this._sha256Hex(new TextEncoder().encode(canonicalRequest));
+        const stringToSign = `AWS4-HMAC-SHA256\n${dateStamp}\n${scope}\n${canonicalRequestHash}`;
+
+        // Calculate signature
+        const signingKey = await this._getSigningKey(this.config.secretAccessKey, shortDate, region, service);
+        const signature = await this._hmacHex(signingKey, stringToSign);
+
+        const authorization = `AWS4-HMAC-SHA256 Credential=${this.config.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+        const resp = await fetch(url, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': contentType,
+                'Host': host,
+                'x-amz-content-sha256': payloadHash,
+                'x-amz-date': dateStamp,
+                'Authorization': authorization,
+            },
+            body: body,
+        });
+
+        if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`Upload failed: ${resp.status} ${text}`);
+        }
+        return true;
+    }
+
+    async uploadProjectsJson(projectsArray) {
+        const json = JSON.stringify(projectsArray, null, 2);
+        const body = new TextEncoder().encode(json);
+        return this.uploadFile('projects.json', body, 'application/json');
+    }
+
+    // --- AWS Sig V4 Helpers ---
+    async _sha256(data) {
+        if (typeof data === 'string') data = new TextEncoder().encode(data);
+        if (data instanceof ArrayBuffer) data = new Uint8Array(data);
+        return await crypto.subtle.digest('SHA-256', data);
+    }
+
+    async _sha256Hex(data) {
+        if (typeof data === 'string') data = new TextEncoder().encode(data);
+        if (data instanceof ArrayBuffer) data = new Uint8Array(data);
+        const hash = await crypto.subtle.digest('SHA-256', data);
+        return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async _hmac(key, data) {
+        if (typeof key === 'string') key = new TextEncoder().encode(key);
+        if (typeof data === 'string') data = new TextEncoder().encode(data);
+        const cryptoKey = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+        return new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, data));
+    }
+
+    async _hmacHex(key, data) {
+        const result = await this._hmac(key, data);
+        return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async _getSigningKey(secretKey, dateStamp, region, service) {
+        let key = await this._hmac(`AWS4${secretKey}`, dateStamp);
+        key = await this._hmac(key, region);
+        key = await this._hmac(key, service);
+        key = await this._hmac(key, 'aws4_request');
+        return key;
     }
 }
 
@@ -418,12 +583,14 @@ class AudioEngine {
 // UI Controller
 // ==============================
 class UIController {
-    constructor(engine, db) {
+    constructor(engine, db, cloud) {
         this.engine = engine;
         this.db = db;
+        this.cloud = cloud;
         this.animationId = null;
         this.isSeeking = false;
         this.currentProjectId = null;
+        this.cloudProjects = []; // Cached cloud projects list
         
         // Temporarily holds tracks when editing
         this.editorTracks = [];
@@ -434,9 +601,21 @@ class UIController {
     async init() {
         try {
             await this.db.init();
+            await this._loadCloudProjects();
             this._renderProjectsList();
         } catch(e) {
             console.error("DB Initialization failed", e);
+        }
+    }
+
+    async _loadCloudProjects() {
+        if (this.cloud.isConfigured()) {
+            try {
+                this.cloudProjects = await this.cloud.getProjectsJson();
+            } catch (e) {
+                console.warn('Failed to load cloud projects:', e);
+                this.cloudProjects = [];
+            }
         }
     }
 
@@ -544,6 +723,20 @@ class UIController {
                 this._togglePlay();
             }
         });
+
+        // Cloud Settings
+        if (dom.cloudSettingsBtn) {
+            dom.cloudSettingsBtn.addEventListener('click', () => this._openCloudSettings());
+        }
+        if (dom.cloudSettingsSaveBtn) {
+            dom.cloudSettingsSaveBtn.addEventListener('click', () => this._saveCloudSettings());
+        }
+        if (dom.cloudSettingsCancelBtn) {
+            dom.cloudSettingsCancelBtn.addEventListener('click', () => this._closeCloudSettings());
+        }
+        if (dom.cloudUploadBtn) {
+            dom.cloudUploadBtn.addEventListener('click', () => this._uploadToCloud());
+        }
     }
     
     // ----------------------------
@@ -554,9 +747,39 @@ class UIController {
             const projects = await this.db.getAllProjects();
             dom.projectList.innerHTML = '';
             
-            if (projects.length > 0) {
+            const hasLocal = projects.length > 0;
+            const hasCloud = this.cloudProjects.length > 0;
+            
+            if (hasLocal || hasCloud) {
                 dom.projectSection.classList.remove('hidden');
                 
+                // Render cloud projects first
+                if (hasCloud) {
+                    this.cloudProjects.forEach(cp => {
+                        const el = document.createElement('div');
+                        el.className = 'project-item project-item-cloud';
+                        
+                        el.innerHTML = `
+                            <div class="project-item-info">
+                                <span class="project-item-name">
+                                    <svg class="cloud-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                                    </svg>
+                                    ${this._escapeHtml(cp.name)}
+                                </span>
+                            </div>
+                            <div style="display: flex; gap: 12px; align-items: center;">
+                                <span class="project-item-tracks">${cp.tracks.length} Tracks</span>
+                                <span class="cloud-badge">Cloud</span>
+                            </div>
+                        `;
+                        
+                        el.addEventListener('click', () => this._loadCloudProject(cp));
+                        dom.projectList.appendChild(el);
+                    });
+                }
+                
+                // Render local projects
                 projects.forEach(p => {
                     const el = document.createElement('div');
                     el.className = 'project-item';
@@ -578,13 +801,11 @@ class UIController {
                         </div>
                     `;
                     
-                    // Click to load
                     el.addEventListener('click', (e) => {
                         if(e.target.closest('.project-item-edit')) return;
                         this._loadProjectFromDB(p.id);
                     });
                     
-                    // Click to edit
                     const editBtn = el.querySelector('.project-item-edit');
                     editBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -796,10 +1017,15 @@ class UIController {
         if (this.currentProjectId) {
             dom.editProjectBtn.classList.remove('hidden');
             dom.projectNameInput.removeAttribute('readonly');
+            // クラウドアップロードボタンの表示（管理者のみ）
+            if (dom.cloudUploadBtn && this.cloud.isUploadConfigured()) {
+                dom.cloudUploadBtn.classList.remove('hidden');
+            }
         } else {
             dom.editProjectBtn.classList.add('hidden');
             dom.projectNameInput.value = 'Demo Project';
             dom.projectNameInput.setAttribute('readonly', 'true');
+            if (dom.cloudUploadBtn) dom.cloudUploadBtn.classList.add('hidden');
         }
 
         this._updatePlayButton(false);
@@ -1190,6 +1416,169 @@ class UIController {
     }
 
     // ----------------------------
+    // Cloud Management
+    // ----------------------------
+    _openCloudSettings() {
+        const config = this.cloud.getConfig();
+        dom.cloudEndpointInput.value = config.endpoint || '';
+        dom.cloudBucketInput.value = config.bucketName || '';
+        dom.cloudAccessKeyInput.value = config.accessKeyId || '';
+        dom.cloudSecretKeyInput.value = config.secretAccessKey || '';
+        dom.cloudPublicUrlInput.value = config.publicUrl || '';
+        dom.cloudSettingsScreen.classList.remove('hidden');
+    }
+
+    _closeCloudSettings() {
+        dom.cloudSettingsScreen.classList.add('hidden');
+    }
+
+    async _saveCloudSettings() {
+        const config = {
+            endpoint: dom.cloudEndpointInput.value.trim(),
+            bucketName: dom.cloudBucketInput.value.trim(),
+            accessKeyId: dom.cloudAccessKeyInput.value.trim(),
+            secretAccessKey: dom.cloudSecretKeyInput.value.trim(),
+            publicUrl: dom.cloudPublicUrlInput.value.trim(),
+        };
+        this.cloud.saveConfig(config);
+        this._closeCloudSettings();
+        
+        // Reload cloud projects
+        await this._loadCloudProjects();
+        this._renderProjectsList();
+    }
+
+    async _loadCloudProject(cloudProject) {
+        try {
+            this._showLoading();
+            this.engine.destroy();
+            this.engine.init();
+            this.currentProjectId = null;
+            
+            dom.projectNameInput.value = cloudProject.name;
+            
+            const total = cloudProject.tracks.length;
+            let loaded = 0;
+            
+            for (let i = 0; i < total; i++) {
+                const t = cloudProject.tracks[i];
+                const color = t.color || TRACK_COLORS[i % TRACK_COLORS.length];
+                dom.loadingText.textContent = `${t.name} を読み込み中... (${i + 1}/${total})`;
+                
+                try {
+                    const audioUrl = this.cloud.getAudioUrl(t.path);
+                    const resp = await fetch(audioUrl);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const arrayBuffer = await resp.arrayBuffer();
+                    const audioBuffer = await this.engine.decodeAudio(arrayBuffer);
+                    this.engine.addTrack(t.name, audioBuffer, color);
+                } catch (err) {
+                    console.error(`Failed to load cloud track ${t.name}:`, err);
+                    dom.loadingText.textContent = `⚠ ${t.name} の読み込みに失敗しました`;
+                    await this._delay(1000);
+                }
+                
+                loaded++;
+                dom.progressFill.style.width = `${(loaded / total) * 100}%`;
+            }
+            
+            if (this.engine.tracks.length > 0) {
+                this._initMixer();
+                // クラウドプロジェクトの場合は編集ボタンを非表示
+                dom.editProjectBtn.classList.add('hidden');
+                dom.projectNameInput.setAttribute('readonly', 'true');
+                // クラウドアップロードボタンも非表示
+                if (dom.cloudUploadBtn) dom.cloudUploadBtn.classList.add('hidden');
+            } else {
+                alert('クラウドプロジェクトの読み込みに失敗しました。');
+                this._goHome();
+            }
+        } catch (e) {
+            console.error('Failed to load cloud project:', e);
+            alert('クラウドプロジェクトの読み込みに失敗しました。');
+            this._goHome();
+        }
+    }
+
+    async _uploadToCloud() {
+        if (!this.currentProjectId) {
+            alert('アップロードするプロジェクトがありません。');
+            return;
+        }
+        if (!this.cloud.isUploadConfigured()) {
+            alert('クラウド設定が完了していません。ホーム画面の⚙ボタンから設定してください。');
+            return;
+        }
+        
+        if (!confirm('このプロジェクトをクラウドに公開しますか？\n他の端末からアクセスできるようになります。')) return;
+        
+        try {
+            this._showLoading();
+            dom.loadingText.textContent = 'クラウドにアップロード中...';
+            
+            const project = await this.db.getProject(this.currentProjectId);
+            if (!project) throw new Error('Project not found');
+            
+            // Generate project ID for cloud
+            const cloudId = `proj_${Date.now()}`;
+            const tracksMeta = [];
+            const total = project.tracks.length;
+            
+            for (let i = 0; i < total; i++) {
+                const t = project.tracks[i];
+                const ext = 'aac'; // Default extension
+                const key = `${cloudId}/${t.name}.${ext}`;
+                
+                dom.loadingText.textContent = `${t.name} をアップロード中... (${i + 1}/${total})`;
+                dom.progressFill.style.width = `${((i + 0.5) / total) * 100}%`;
+                
+                const body = new Uint8Array(t.buffer);
+                await this.cloud.uploadFile(key, body, 'audio/aac');
+                
+                tracksMeta.push({
+                    name: t.name,
+                    color: t.color || TRACK_COLORS[i % TRACK_COLORS.length],
+                    path: key,
+                });
+                
+                dom.progressFill.style.width = `${((i + 1) / total) * 100}%`;
+            }
+            
+            // Update projects.json
+            dom.loadingText.textContent = 'プロジェクト情報を更新中...';
+            const existingProjects = await this.cloud.getProjectsJson();
+            
+            const newCloudProject = {
+                id: cloudId,
+                name: project.name,
+                date: Date.now(),
+                tracks: tracksMeta,
+            };
+            
+            existingProjects.push(newCloudProject);
+            await this.cloud.uploadProjectsJson(existingProjects);
+            
+            // Refresh cloud list
+            this.cloudProjects = existingProjects;
+            this._renderProjectsList();
+            
+            dom.progressFill.style.width = '100%';
+            dom.loadingText.textContent = 'アップロード完了！';
+            await this._delay(1500);
+            
+            // Return to player
+            dom.loadingOverlay.classList.add('hidden');
+            dom.app.classList.remove('hidden');
+            
+        } catch (e) {
+            console.error('Cloud upload failed:', e);
+            alert(`アップロードに失敗しました: ${e.message}`);
+            dom.loadingOverlay.classList.add('hidden');
+            dom.app.classList.remove('hidden');
+        }
+    }
+
+    // ----------------------------
     // Helpers
     // ----------------------------
     _formatTime(seconds) {
@@ -1214,6 +1603,7 @@ class UIController {
 // Initialize Application
 // ==============================
 const db = new DBManager();
+const cloud = new CloudManager();
 const engine = new AudioEngine();
 engine.init();
-const ui = new UIController(engine, db);
+const ui = new UIController(engine, db, cloud);
