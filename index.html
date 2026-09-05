@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kz Stem Player</title>
+    <meta name="description" content="ブラウザ上でステムデータ（パラデータ）を再生・操作できるWebアプリケーション">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ==============================
+         Loading Overlay
+         ============================== -->
+    <div id="loading-overlay" class="overlay hidden">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p class="loading-title">ステムを読み込み中...</p>
+            <p class="loading-detail" id="loading-text">準備しています</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==============================
+         Home Screen (Drop Zone + Projects)
+         ============================== -->
+    <div id="home-screen" class="overlay">
+        <div class="home-container">
+            <!-- Drop Zone -->
+            <div class="drop-content" id="drop-content">
+                <div class="drop-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 18V5l12-2v13"/>
+                        <circle cx="6" cy="18" r="3"/>
+                        <circle cx="18" cy="16" r="3"/>
+                    </svg>
+                </div>
+                <h1 class="drop-title">Kz Stem Player <span style="font-size: 0.875rem; color: var(--text-muted); margin-left: 8px; font-weight: 400;">Ver1.05</span></h1>
+                <p class="drop-description">ステムファイルをドラッグ&ドロップしてください</p>
+                <div class="drop-divider">
+                    <span>または</span>
+                </div>
+                <div class="drop-actions">
+                    <label class="btn btn-primary" for="file-input">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        ファイルを選択
+                        <input type="file" id="file-input" accept="audio/*" multiple hidden>
+                    </label>
+                    <button class="btn btn-secondary" id="demo-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                        デモを再生
+                    </button>
+                </div>
+                <p class="drop-hint">対応形式: WAV, MP3, FLAC, OGG, AAC</p>
+            </div>
+
+            <!-- Saved Projects -->
+            <div class="project-section hidden" id="project-section">
+                <div class="project-section-header">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <h2>保存済みプロジェクト</h2>
+                </div>
+                <div class="project-list" id="project-list">
+                    <!-- Dynamically generated -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==============================
+         Main Application
+         ============================== -->
+    <div id="app" class="hidden">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="app-logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                    <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                </svg>
+                <span>Kz Stem Player <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 8px; font-weight: 400;">Ver1.05</span></span>
+            </div>
+            <div class="app-project-name">
+                <input type="text" id="project-name-input" value="Untitled Project" aria-label="プロジェクト名">
+            </div>
+            <div class="app-header-actions">
+                <button class="btn btn-secondary" id="edit-project-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20h9"></path>
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                    </svg>
+                    編集
+                </button>
+                <button class="btn btn-secondary" id="home-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                    </svg>
+                    ホーム
+                </button>
+            </div>
+        </header>
+
+        <!-- Transport Controls -->
+        <div class="transport">
+            <div class="transport-buttons">
+                <button class="transport-btn" id="restart-btn" title="最初に戻る">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+                    </svg>
+                </button>
+                <button class="transport-btn transport-play" id="play-btn" title="再生 / 停止">
+                    <svg class="icon-play" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                    <svg class="icon-pause hidden" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                    </svg>
+                </button>
+                <div class="tempo-controls">
+                    <button class="tempo-btn active" data-tempo="1.0">1.0x</button>
+                    <button class="tempo-btn" data-tempo="0.75">0.75x</button>
+                    <button class="tempo-btn" data-tempo="0.5">0.5x</button>
+                </div>
+            </div>
+            <div class="transport-timeline">
+                <span class="time-display" id="current-time">0:00</span>
+                <div class="timeline" id="timeline">
+                    <div class="timeline-bg"></div>
+                    <div class="timeline-fill" id="timeline-fill"></div>
+                    <div class="timeline-handle" id="timeline-handle"></div>
+                </div>
+                <span class="time-display" id="total-time">0:00</span>
+            </div>
+        </div>
+
+        <!-- Mixer Section -->
+        <div class="mixer">
+            <!-- Track Channels (generated by JS) -->
+            <div class="channels-scroll">
+                <div class="channels" id="channels"></div>
+            </div>
+
+            <!-- Master Channel -->
+            <div class="channel channel-master">
+                <div class="channel-header">
+                    <span class="channel-name">MASTER</span>
+                    <div class="channel-color-bar" style="background: var(--color-master)"></div>
+                </div>
+                <div class="channel-controls">
+                    <div class="channel-buttons-placeholder"></div>
+                </div>
+                <div class="fader-wrapper">
+                    <div class="fader-track-bg"></div>
+                    <div class="fader-fill" id="master-fill" style="--fill-pct: 100%; --track-color: var(--color-master)"></div>
+                    <input
+                        type="range"
+                        class="fader"
+                        id="master-fader"
+                        min="0"
+                        max="100"
+                        value="100"
+                        style="--track-color: var(--color-master)"
+                        aria-label="マスター音量"
+                    >
+                </div>
+                <div class="channel-value" id="master-value">100</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==============================
+         Editor Screen
+         ============================== -->
+    <div id="editor-screen" class="overlay hidden">
+        <div class="home-container" style="max-width: 700px;">
+            <div class="project-section" style="display: block;">
+                <div class="project-section-header" style="justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                        </svg>
+                        <h2 id="editor-project-title" style="display:none;">プロジェクトの編集</h2>
+                        <input type="text" id="editor-project-name-input" class="editor-project-name-input" value="プロジェクト名" aria-label="プロジェクト名を編集">
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-secondary" id="editor-delete-project-btn" style="color: var(--danger-color); border-color: rgba(239, 68, 68, 0.3);">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                            削除
+                        </button>
+                        <button class="btn btn-primary" id="editor-done-btn">完了</button>
+                    </div>
+                </div>
+                
+                <h3 style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 12px; margin-top: 16px;">現在のトラック一覧</h3>
+                <div class="project-list" id="editor-track-list" style="max-height: 250px;">
+                    <!-- Tracks to be edited -->
+                </div>
+
+                <div class="drop-divider" style="margin: 24px 0;">
+                    <span>音源を追加する</span>
+                </div>
+
+                <div class="drop-content" id="editor-drop-content" style="padding: 24px; min-height: auto;">
+                    <p class="drop-description" style="margin-bottom: 16px;">ステムファイルを追加</p>
+                    <div class="drop-actions" style="margin-bottom: 0;">
+                        <label class="btn btn-secondary" for="editor-file-input">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+                            </svg>
+                            ファイルを選択
+                            <input type="file" id="editor-file-input" accept="audio/*" multiple hidden>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <button class="btn btn-ghost" id="editor-cancel-btn" style="align-self: center;">キャンセル</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
