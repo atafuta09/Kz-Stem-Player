@@ -452,19 +452,38 @@ class AudioEngine {
         const startTime = this.audioContext.currentTime;
 
         this.tracks.forEach(track => {
-            const source = this.audioContext.createBufferSource();
-            source.buffer = track.buffer;
-            source.connect(track.gainNode);
+            if (!window.SoundTouch) {
+                // Fallback if SoundTouch is not loaded
+                const source = this.audioContext.createBufferSource();
+                source.buffer = track.buffer;
+                source.connect(track.gainNode);
 
-            const offset = Math.min(this.pauseOffset, track.buffer.duration);
-            const remaining = track.buffer.duration - offset;
+                const offset = Math.min(this.pauseOffset, track.buffer.duration);
+                const remaining = track.buffer.duration - offset;
 
-            if (remaining > 0) {
-                source.playbackRate.value = this.playbackRate;
-                source.start(startTime, offset);
+                if (remaining > 0) {
+                    source.playbackRate.value = this.playbackRate;
+                    source.start(startTime, offset);
+                }
+                track.sourceNode = source;
+            } else {
+                // SoundTouchJS implementation (Preserves Pitch)
+                const offset = Math.min(this.pauseOffset, track.buffer.duration);
+                const offsetSamples = Math.floor(offset * this.audioContext.sampleRate);
+                
+                const stSource = new window.SoundTouch.WebAudioBufferSource(track.buffer);
+                stSource.position = offsetSamples;
+                
+                const st = new window.SoundTouch.SoundTouch();
+                st.tempo = this.playbackRate;
+                
+                const filter = new window.SoundTouch.SimpleFilter(stSource, st);
+                const node = window.SoundTouch.getWebAudioNode(this.audioContext, filter);
+                
+                node.connect(track.gainNode);
+                track.sourceNode = node;
+                track.st = st; // Store SoundTouch instance to update tempo dynamically
             }
-
-            track.sourceNode = source;
         });
 
         this.startContextTime = startTime;
@@ -472,35 +491,38 @@ class AudioEngine {
     }
 
     setPlaybackRate(rate) {
-        this.playbackRate = rate;
         if (this.isPlaying) {
             // Calculate elapsed time before changing rate
-            const elapsed = (this.audioContext.currentTime - this.startContextTime) * this.tracks[0].sourceNode.playbackRate.value;
+            const elapsed = (this.audioContext.currentTime - this.startContextTime) * this.playbackRate;
             this.pauseOffset += elapsed;
             this.startContextTime = this.audioContext.currentTime;
 
-            // Apply new rate to all running sources
+            // Update tempo dynamically if using SoundTouch
             this.tracks.forEach(track => {
-                if (track.sourceNode) {
-                    track.sourceNode.playbackRate.setValueAtTime(rate, this.audioContext.currentTime);
+                if (track.st) {
+                    track.st.tempo = rate;
+                } else if (track.sourceNode && track.sourceNode.playbackRate) {
+                    track.sourceNode.playbackRate.value = rate;
                 }
             });
         }
+        this.playbackRate = rate;
     }
 
     stop() {
         if (!this.isPlaying) return;
 
-        this.pauseOffset += this.audioContext.currentTime - this.startContextTime;
-        if (this.pauseOffset > this.duration) {
-            this.pauseOffset = this.duration;
-        }
+        this.pauseOffset += (this.audioContext.currentTime - this.startContextTime) * this.playbackRate;
 
         this.tracks.forEach(track => {
             if (track.sourceNode) {
-                try { track.sourceNode.stop(); } catch (e) {}
+                if (track.sourceNode.stop) {
+                    // For native AudioBufferSourceNode
+                    try { track.sourceNode.stop(); } catch (e) {}
+                }
                 track.sourceNode.disconnect();
                 track.sourceNode = null;
+                track.st = null;
             }
         });
 
@@ -519,11 +541,8 @@ class AudioEngine {
     }
 
     getCurrentTime() {
-        if (this.isPlaying) {
-            const elapsed = this.pauseOffset + (this.audioContext.currentTime - this.startContextTime) * this.playbackRate;
-            return Math.min(elapsed, this.duration);
-        }
-        return this.pauseOffset;
+        if (!this.isPlaying) return this.pauseOffset;
+        return this.pauseOffset + (this.audioContext.currentTime - this.startContextTime) * this.playbackRate;
     }
 
     toggleMute(index) {
